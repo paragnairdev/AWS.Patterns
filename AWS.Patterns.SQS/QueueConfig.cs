@@ -4,11 +4,11 @@ namespace AWS.Patterns.SQS
 {
     public class QueueConfig
     {
-        private readonly string _queueUrl;
+        public readonly string QueueUrl;
 
         public QueueConfig(string queueUrl)
         {
-            _queueUrl = !string.IsNullOrWhiteSpace(queueUrl) ? queueUrl : throw new ArgumentNullException(nameof(queueUrl));
+            QueueUrl = !string.IsNullOrWhiteSpace(queueUrl) ? queueUrl : throw new ArgumentNullException(nameof(queueUrl));
         }
     }
 }
