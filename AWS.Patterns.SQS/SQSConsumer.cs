@@ -20,8 +20,7 @@ namespace AWS.Patterns.SQS
         // blocks
         private TransformManyBlock<ReceiveMessageResponse, MessagePackage<TRecordType>> serializeBlock;
         private TransformBlock<MessagePackage<TRecordType>, MessagePackage<TRecordType>> processBlock;
-        private BatchBlock<MessagePackage<TRecordType>> processedBlock;
-        private ActionBlock<MessagePackage<TRecordType>[]> deleteBlock;
+        private ActionBlock<MessagePackage<TRecordType>> deleteSingleBlock;
         
         public SQSConsumer(IAmazonSQS sqs, SQSConsumerConfig config, IQueueItemProcessor<TRecordType> processor)
         {
@@ -56,7 +55,7 @@ namespace AWS.Patterns.SQS
             do
             {
                 var messagesToPoll = Math.Min(messagesPossible, _maxMessagesToPoll);
-                
+                Console.WriteLine("Polling for messages");
                 var response = await _sqs.ReceiveMessageAsync(new ReceiveMessageRequest()
                 {
                     QueueUrl = _config.QueueUrl,
@@ -72,6 +71,7 @@ namespace AWS.Patterns.SQS
                 messagesPossible -= response.Messages.Count;
             } while (messagesPossible > 0 && !token.IsCancellationRequested);
             
+            Console.WriteLine("No longer polling");
             buffer.Complete();
         }
 
@@ -89,7 +89,7 @@ namespace AWS.Patterns.SQS
             serializeBlock.Complete();
             
             // wait until the final block is complete
-            deleteBlock.Completion.Wait();
+            deleteSingleBlock.Completion.Wait();
         }
 
         private static IEnumerable<MessagePackage<TRecordType>> ConvertMessages(ReceiveMessageResponse sqsResponse)
@@ -134,27 +134,19 @@ namespace AWS.Patterns.SQS
                     }
                 }, processBufferOption);
 
-            // This sets a batched block so when there are 10 messages in the block, it will forward it to its linked block
-            processedBlock = new BatchBlock<MessagePackage<TRecordType>>(10); // we need to fix this to 10 as SQS batch request can only do 10 operations at a time
-            
-            // this block deletes a batch of messages from the queue
-            deleteBlock = new ActionBlock<MessagePackage<TRecordType>[]>(async messages =>
+            deleteSingleBlock = new ActionBlock<MessagePackage<TRecordType>>(async message =>
             {
-                await _sqs.DeleteMessageBatchAsync(new DeleteMessageBatchRequest
+                Console.WriteLine($"Deleting message with value {message.Record}");
+                await _sqs.DeleteMessageAsync(new DeleteMessageRequest
                 {
                     QueueUrl = _config.QueueUrl,
-                    Entries = messages.Select(m => new DeleteMessageBatchRequestEntry()
-                    {
-                        Id = m.MessageId,
-                        ReceiptHandle = m.ReceiptHandle
-                    }).ToList()
+                    ReceiptHandle = message.ReceiptHandle
                 });
             });
             
             // link the blocks
             serializeBlock.LinkTo(processBlock, linkOptions);
-            processBlock.LinkTo(processedBlock, linkOptions);
-            processedBlock.LinkTo(deleteBlock, linkOptions);
+            processBlock.LinkTo(deleteSingleBlock, linkOptions);
         }
 
         
