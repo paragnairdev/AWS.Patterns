@@ -38,13 +38,13 @@ namespace AWS.Patterns.LocalTests
                 );
 
             }
-            catch (TaskCanceledException canceledException)
+            catch (TaskCanceledException)
             {
                 Console.WriteLine("Cancellation was requested");
             }
             catch (Exception e)
             {
-                Console.WriteLine(e.ToString());
+                Console.WriteLine($"Failed with errors: {e}");
             }
             
             Console.WriteLine("Completed");

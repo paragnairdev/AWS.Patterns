@@ -18,9 +18,9 @@ namespace AWS.Patterns.SQS
         private readonly int _maxMessagesToPoll = 10; // we cannot poll for more than 10 messages at a time
         
         // blocks
-        private TransformManyBlock<ReceiveMessageResponse, MessagePackage<TRecordType>> serializeBlock;
-        private TransformBlock<MessagePackage<TRecordType>, MessagePackage<TRecordType>> processBlock;
-        private ActionBlock<MessagePackage<TRecordType>> deleteSingleBlock;
+        private TransformManyBlock<ReceiveMessageResponse, MessagePackage<TRecordType>> _serializeBlock;
+        private TransformBlock<MessagePackage<TRecordType>, MessagePackage<TRecordType>> _processBlock;
+        private ActionBlock<MessagePackage<TRecordType>> _deleteSingleBlock;
         
         public SQSConsumer(IAmazonSQS sqs, SQSConsumerConfig config, IQueueItemProcessor<TRecordType> processor)
         {
@@ -82,14 +82,14 @@ namespace AWS.Patterns.SQS
                 var sqsResponse = await buffer.ReceiveAsync();
                 
                 // send it to the first block
-                await serializeBlock.SendAsync(sqsResponse);
+                await _serializeBlock.SendAsync(sqsResponse);
             }
             
             // inform the starting block we will be sending no more messages
-            serializeBlock.Complete();
+            _serializeBlock.Complete();
             
             // wait until the final block is complete
-            deleteSingleBlock.Completion.Wait();
+            _deleteSingleBlock.Completion.Wait();
         }
 
         private static IEnumerable<MessagePackage<TRecordType>> ConvertMessages(ReceiveMessageResponse sqsResponse)
@@ -114,12 +114,12 @@ namespace AWS.Patterns.SQS
             
             // define the blocks
             // this block converts the sqs response to serialized records
-            serializeBlock =
+            _serializeBlock =
                 new TransformManyBlock<ReceiveMessageResponse, MessagePackage<TRecordType>>(response =>
                     ConvertMessages(response), largeBufferOptions);
             
             // this block processes a single record
-            processBlock =
+            _processBlock =
                 new TransformBlock<MessagePackage<TRecordType>, MessagePackage<TRecordType>>(async message =>
                 {
                     try
@@ -134,7 +134,7 @@ namespace AWS.Patterns.SQS
                     }
                 }, processBufferOption);
 
-            deleteSingleBlock = new ActionBlock<MessagePackage<TRecordType>>(async message =>
+            _deleteSingleBlock = new ActionBlock<MessagePackage<TRecordType>>(async message =>
             {
                 Console.WriteLine($"Deleting message with value {message.Record}");
                 await _sqs.DeleteMessageAsync(new DeleteMessageRequest
@@ -145,8 +145,8 @@ namespace AWS.Patterns.SQS
             });
             
             // link the blocks
-            serializeBlock.LinkTo(processBlock, linkOptions);
-            processBlock.LinkTo(deleteSingleBlock, linkOptions);
+            _serializeBlock.LinkTo(_processBlock, linkOptions);
+            _processBlock.LinkTo(_deleteSingleBlock, linkOptions);
         }
 
         
