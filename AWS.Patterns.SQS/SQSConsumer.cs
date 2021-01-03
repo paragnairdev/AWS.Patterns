@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
@@ -15,26 +16,39 @@ namespace AWS.Patterns.SQS
         private readonly SQSConsumerConfig _config;
         private readonly IQueueItemProcessor<TRecordType> _processor;
         private readonly int _maxMessagesToPoll = 10; // we cannot poll for more than 10 messages at a time
-        private TransformManyBlock<ReceiveMessageResponse, TRecordType> _convertMessageBlock;
-        private ActionBlock<TRecordType> _processBlock;
-        private BufferBlock<TRecordType> _recordsBlock = new BufferBlock<TRecordType>();
+        
+        // blocks
+        private TransformManyBlock<ReceiveMessageResponse, MessagePackage<TRecordType>> serializeBlock;
+        private TransformBlock<MessagePackage<TRecordType>, MessagePackage<TRecordType>> processBlock;
+        private BatchBlock<MessagePackage<TRecordType>> processedBlock;
+        private ActionBlock<MessagePackage<TRecordType>[]> deleteBlock;
         
         public SQSConsumer(IAmazonSQS sqs, SQSConsumerConfig config, IQueueItemProcessor<TRecordType> processor)
         {
             _sqs = sqs ?? throw new ArgumentNullException(nameof(sqs));
             _config = config ?? throw new ArgumentNullException(nameof(config));
-            _processor = processor;
-            _convertMessageBlock = new TransformManyBlock<ReceiveMessageResponse, TRecordType>(r => ConvertMessages(r),
-                new ExecutionDataflowBlockOptions()
-                {
-                    MaxDegreeOfParallelism = 5
-                });
-            _processBlock = new ActionBlock<TRecordType>(r => _recordsBlock.Post(r));
-
-            _convertMessageBlock.LinkTo(_processBlock);
+            _processor = processor ?? throw new ArgumentNullException(nameof(processor));
         }
         
         public async Task<int> ConsumeAsync(CancellationToken token)
+        {
+            // setup the pipeline
+            StartPipeline();
+            
+            // start consuming
+            var buffer = new BufferBlock<ReceiveMessageResponse>();
+            var consumer = StartConsumerAsync(buffer);
+            
+            // start producing
+            await StartProducerAsync(buffer, token);
+            
+            // wait consumers to complete their work
+            await consumer;
+
+            return 0;
+        }
+
+        private async Task StartProducerAsync(ITargetBlock<ReceiveMessageResponse> buffer, CancellationToken token)
         {
             // set counter
             var messagesPossible = _config.ItemsPerBatch;
@@ -52,24 +66,97 @@ namespace AWS.Patterns.SQS
                 }, token);
                 
                 // send these messages to the buffer
-                _convertMessageBlock.Post(response);
+                buffer.Post(response);
                 
                 // get the number of messages read
                 messagesPossible -= response.Messages.Count;
             } while (messagesPossible > 0 && !token.IsCancellationRequested);
             
-            _convertMessageBlock.Complete();
-
-            return 0;
+            buffer.Complete();
         }
 
-        private IEnumerable<TRecordType> ConvertMessages(ReceiveMessageResponse sqsResponse)
+        private async Task StartConsumerAsync(ISourceBlock<ReceiveMessageResponse> buffer)
+        {
+            while (await buffer.OutputAvailableAsync())
+            {
+                var sqsResponse = await buffer.ReceiveAsync();
+                
+                // send it to the first block
+                await serializeBlock.SendAsync(sqsResponse);
+            }
+            
+            // inform the starting block we will be sending no more messages
+            serializeBlock.Complete();
+            
+            // wait until the final block is complete
+            deleteBlock.Completion.Wait();
+        }
+
+        private static IEnumerable<MessagePackage<TRecordType>> ConvertMessages(ReceiveMessageResponse sqsResponse)
         {
             for (var index = sqsResponse.Messages.Count - 1; index >= 0; index--)
             {
                 var message = sqsResponse.Messages[index];
-                yield return JsonConvert.DeserializeObject<TRecordType>(message.Body);
+                var record = JsonConvert.DeserializeObject<TRecordType>(message.Body);
+                yield return new MessagePackage<TRecordType>(message, record);
             }
         }
+
+        private void StartPipeline()
+        {
+            // setup link options
+            var linkOptions = new DataflowLinkOptions {PropagateCompletion = true};
+            
+            // setup buffer options
+            var largeBufferOptions = new ExecutionDataflowBlockOptions() { BoundedCapacity = 1000 };
+            var deleteBufferOption = new ExecutionDataflowBlockOptions {BoundedCapacity = 10};
+            var processBufferOption = new ExecutionDataflowBlockOptions {BoundedCapacity = 2};
+            
+            // define the blocks
+            // this block converts the sqs response to serialized records
+            serializeBlock =
+                new TransformManyBlock<ReceiveMessageResponse, MessagePackage<TRecordType>>(response =>
+                    ConvertMessages(response), largeBufferOptions);
+            
+            // this block processes a single record
+            processBlock =
+                new TransformBlock<MessagePackage<TRecordType>, MessagePackage<TRecordType>>(async message =>
+                {
+                    try
+                    {
+                        await _processor.ProcessAsync(message.Record);
+                        return message;
+                    }
+                    catch (Exception e)
+                    {
+                        // TODO: handle exception or report it
+                        return null;
+                    }
+                }, processBufferOption);
+
+            // This sets a batched block so when there are 10 messages in the block, it will forward it to its linked block
+            processedBlock = new BatchBlock<MessagePackage<TRecordType>>(10); // we need to fix this to 10 as SQS batch request can only do 10 operations at a time
+            
+            // this block deletes a batch of messages from the queue
+            deleteBlock = new ActionBlock<MessagePackage<TRecordType>[]>(async messages =>
+            {
+                await _sqs.DeleteMessageBatchAsync(new DeleteMessageBatchRequest
+                {
+                    QueueUrl = _config.QueueUrl,
+                    Entries = messages.Select(m => new DeleteMessageBatchRequestEntry()
+                    {
+                        Id = m.MessageId,
+                        ReceiptHandle = m.ReceiptHandle
+                    }).ToList()
+                });
+            });
+            
+            // link the blocks
+            serializeBlock.LinkTo(processBlock, linkOptions);
+            processBlock.LinkTo(processedBlock, linkOptions);
+            processedBlock.LinkTo(deleteBlock, linkOptions);
+        }
+
+        
     }
 }
