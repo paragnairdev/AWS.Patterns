@@ -59,7 +59,6 @@ namespace AWS.Patterns.SQS
             {
                 var messagesToPoll = Math.Min(messagesPossible, _maxMessagesToPoll);
                 OnMessagePoll?.Invoke(this, MessagePollEvent.Polling());
-                Log?.Invoke(this,"Polling for messages");
                 var response = await _sqs.ReceiveMessageAsync(new ReceiveMessageRequest()
                 {
                     QueueUrl = _config.QueueUrl,

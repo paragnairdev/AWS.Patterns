@@ -22,6 +22,17 @@ namespace AWS.Patterns.LocalTests
             {
                 Console.WriteLine($"Log: {message}");
             };
+            consumer.OnMessagePoll += (object sender, MessagePollEvent e) =>
+            {
+                if (e.IsPolling)
+                {
+                    Console.WriteLine("Polling for messages");
+                }
+                else
+                {
+                    Console.WriteLine("Stopped polling for messages");
+                }
+            };
             
             var tokenSource = new CancellationTokenSource();
 
