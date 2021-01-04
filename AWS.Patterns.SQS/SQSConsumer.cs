@@ -47,6 +47,9 @@ namespace AWS.Patterns.SQS
             return 0;
         }
 
+        public event EventHandler<string> Log;
+        public event EventHandler<MessagePollEvent> OnMessagePoll;
+
         private async Task StartProducerAsync(ITargetBlock<ReceiveMessageResponse> buffer, CancellationToken token)
         {
             // set counter
@@ -55,7 +58,8 @@ namespace AWS.Patterns.SQS
             do
             {
                 var messagesToPoll = Math.Min(messagesPossible, _maxMessagesToPoll);
-                Console.WriteLine("Polling for messages");
+                OnMessagePoll?.Invoke(this, MessagePollEvent.Polling());
+                Log?.Invoke(this,"Polling for messages");
                 var response = await _sqs.ReceiveMessageAsync(new ReceiveMessageRequest()
                 {
                     QueueUrl = _config.QueueUrl,
@@ -71,7 +75,7 @@ namespace AWS.Patterns.SQS
                 messagesPossible -= response.Messages.Count;
             } while (messagesPossible > 0 && !token.IsCancellationRequested);
             
-            Console.WriteLine("No longer polling");
+            OnMessagePoll?.Invoke(this, MessagePollEvent.StoppedPolling());
             buffer.Complete();
         }
 
@@ -136,7 +140,7 @@ namespace AWS.Patterns.SQS
 
             _deleteSingleBlock = new ActionBlock<MessagePackage<TRecordType>>(async message =>
             {
-                Console.WriteLine($"Deleting message with value {message.Record}");
+                Log?.Invoke(this, $"Deleting message with value {message.Record}");
                 await _sqs.DeleteMessageAsync(new DeleteMessageRequest
                 {
                     QueueUrl = _config.QueueUrl,

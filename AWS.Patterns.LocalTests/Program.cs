@@ -18,6 +18,11 @@ namespace AWS.Patterns.LocalTests
             var sqsClient = new AmazonSQSClient(FallbackCredentialsFactory.GetCredentials());
             var consumer = new SQSConsumer<int>(sqsClient, new SQSConsumerConfig(Environment.GetEnvironmentVariable("QueueUrl"), 10, 20), new ExampleQueueProcessor());
 
+            consumer.Log += (sender, message) =>
+            {
+                Console.WriteLine($"Log: {message}");
+            };
+            
             var tokenSource = new CancellationTokenSource();
 
             try
@@ -55,9 +60,9 @@ namespace AWS.Patterns.LocalTests
     {
         public async Task ProcessAsync(int record)
         {
-            Console.WriteLine($"Processing record with value {record}");
+            Console.WriteLine($"Service: Processing record with value {record}");
             Thread.Sleep(TimeSpan.FromSeconds(10));
-            Console.WriteLine($"Processed record with value {record}");
+            Console.WriteLine($"Service: Processed record with value {record}");
         }
     }
 }
