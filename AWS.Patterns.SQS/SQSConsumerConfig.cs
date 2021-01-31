@@ -9,8 +9,8 @@ namespace AWS.Patterns.SQS
 
         public SQSConsumerConfig(string queueUrl, int itemsPerBatch, int expectedTimeToProcessSingleItem) : base(queueUrl)
         {
-            ExpectedTimeToProcessSingleItem = expectedTimeToProcessSingleItem > 0 ? expectedTimeToProcessSingleItem : throw new ArgumentException("Expected time to process needs to be at least 1 second", nameof(expectedTimeToProcessSingleItem));
             ItemsPerBatch = itemsPerBatch > 0 ? itemsPerBatch : throw new ArgumentException("Items per batch should be at least 1", nameof(itemsPerBatch));
+            ExpectedTimeToProcessSingleItem = expectedTimeToProcessSingleItem > 0 ? expectedTimeToProcessSingleItem : throw new ArgumentException("Expected time to process needs to be at least 1 second", nameof(expectedTimeToProcessSingleItem));
         }
     }
 }
